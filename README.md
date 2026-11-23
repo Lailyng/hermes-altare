@@ -1,9 +1,15 @@
-# 9Router di Altare Sandbox dengan tmux
+# Hermes + 9Router di Altare Sandbox dengan tmux
 
 > Tutorial lengkap dari nol untuk pemula.
-> Install 9Router di Altare Sandbox (Linux gratis), jalankan terus-menerus dengan `tmux`, setting dashboard, tambah provider AI, lalu sambungkan ke Hermes / Claude Code / Cursor.
+> Install Hermes Agent (Nous Research) dan 9Router di Altare Sandbox (Linux gratis), jalankan terus-menerus dengan `tmux`, sambungkan Hermes ke model AI lewat 9Router, lalu chat Hermes dari Telegram.
 
 Tutorial ini dibuat untuk orang yang baru pertama kali pegang VPS / Sandbox. Semua perintah bisa copy-paste. Kalau ada langkah yang gagal, jangan lanjut dulu, baca bagian [Troubleshooting](#troubleshooting).
+
+**Struktur tutorial ini:**
+- **Bagian 1 — 9Router:** Langkah 0 sampai 10. Install 9Router, tambah provider AI, test endpoint.
+- **Bagian 2 — Hermes:** Langkah 11 sampai 15. Install Hermes, sambungkan ke 9Router, buat bot Telegram, jalankan gateway di tmux, test dari Telegram.
+
+Jangan loncat ke Bagian 2 sebelum Bagian 1 selesai dan `curl http://localhost:20128/v1/models` berhasil.
 
 ---
 
@@ -23,6 +29,11 @@ Tutorial ini dibuat untuk orang yang baru pertama kali pegang VPS / Sandbox. Sem
 - [8. Combo: Perlu atau Tidak?](#8-combo-perlu-atau-tidak)
 - [9. Test Endpoint 9Router](#9-test-endpoint-9router)
 - [10. Sambungkan ke Hermes dan Tool Lain](#10-sambungkan-ke-hermes-dan-tool-lain)
+- [11. Install Hermes Agent](#11-install-hermes-agent)
+- [12. Sambungkan Hermes ke 9Router](#12-sambungkan-hermes-ke-9router)
+- [13. Buat Bot Telegram dan Sambungkan ke Hermes](#13-buat-bot-telegram-dan-sambungkan-ke-hermes)
+- [14. Jalankan Hermes Gateway di tmux](#14-jalankan-hermes-gateway-di-tmux)
+- [15. Test Hermes dari Telegram dan Terminal](#15-test-hermes-dari-telegram-dan-terminal)
 - [Perintah Harian tmux](#perintah-harian-tmux)
 - [Troubleshooting](#troubleshooting)
 - [Keamanan](#keamanan)
@@ -729,6 +740,519 @@ Nama model diganti sesuai yang kamu punya di dashboard.
 
 ---
 
+---
+
+# Bagian 2 — Hermes Agent
+
+> Prasyarat: Bagian 1 sudah selesai. 9Router sudah jalan di tmux `9router`, dan `curl -s http://localhost:20128/v1/models` sudah keluar daftar model.
+>
+> Kalau prasyarat itu belum terpenuhi, jangan lanjut. Hermes tanpa model yang jalan hanya akan diam di Telegram.
+
+## Apa itu Hermes Agent?
+
+Hermes Agent adalah **AI agent open-source dari Nous Research**. Bedanya dengan chatbot biasa:
+
+- Hermes bisa menjalankan perintah, membaca / menulis file, menjalankan terminal, dan memakai tools, bukan cuma menjawab chat.
+- Hermes bisa dihubungi dari Telegram, jadi kamu bisa menyuruhnya dari HP, tanpa buka laptop.
+- Hermes bisa memakai model apa saja yang kompatibel dengan OpenAI. Di tutorial ini, modelnya disuplai oleh 9Router.
+
+Alurnya:
+
+```
+Kamu di Telegram
+    |
+    v
+Bot Telegram
+    |
+    v
+Hermes Gateway (di Sandbox, tmux "hermes")
+    |
+    v
+9Router (di Sandbox, tmux "9router", http://localhost:20128/v1)
+    |
+    v
+Gemini / Kiro / Antigravity
+```
+
+Dua file Hermes yang paling penting:
+
+```
+~/.hermes/config.yaml   # konfigurasi: model, provider, platform
+~/.hermes/.env          # rahasia: API key, token bot (mode 0600, jangan dibagikan)
+```
+
+## 11. Install Hermes Agent
+
+### 11.1 Syarat sebelum install
+
+Pastikan ini sudah ada di Sandbox (sudah disiapkan di Bagian 1):
+
+```bash
+node -v
+npm -v
+curl --version
+git --version
+```
+
+Hermes installer akan mengurus Python, Node.js, ripgrep, dan ffmpeg-nya sendiri. Yang kamu perlukan hanya `curl` dan `git`.
+
+Install `git` dan paket dasar kalau belum ada:
+
+```bash
+apt update && apt install -y curl git ca-certificates python3
+```
+
+### 11.2 Jalankan installer resmi
+
+Di SSH Sandbox, jalankan installer resmi Hermes:
+
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+
+> Kalau kamu tidak nyaman pipe script langsung ke `bash`, unduh dan baca dulu, baru jalankan:
+>
+> ```bash
+> curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh
+> less /tmp/hermes-install.sh
+> bash /tmp/hermes-install.sh
+> ```
+
+Tunggu sampai installer selesai. Installer akan memilih Python, membuat virtual environment terisolasi, menginstall Hermes dan dependensinya, dan menaruh launcher CLI di `~/.local/bin`.
+
+Setelah selesai, tutup SSH lalu masuk lagi, atau jalankan:
+
+```bash
+source ~/.bashrc
+```
+
+Lalu cek:
+
+```bash
+hermes --version
+hermes doctor
+```
+
+Kalau `hermes --version` muncul nomor versi, instalasi berhasil.
+
+Kalau muncul `command not found`, cek PATH:
+
+```bash
+ls ~/.local/bin/hermes
+export PATH="$HOME/.local/bin:$PATH"
+hermes --version
+```
+
+### 11.3 Install tools tambahan Hermes
+
+Hermes punya package manager sendiri untuk tools yang dibutuhkannya (ffmpeg, node, ripgrep, chromium, dll). Jalankan:
+
+```bash
+hermes pm install
+```
+
+Hasil yang normal: sebagian besar berhasil, contoh `ffmpeg`, `node`, `npm`, `pnpm`, `python`, `ripgrep`, `venv`, `chromium` dengan tanda centang.
+
+Kalau ada yang gagal, contoh:
+
+```
+✗ cua-driver: ... libxkbcommon.so.0: cannot open shared object file
+⚠ optional cua-driver was not installed
+```
+
+Itu **boleh diabaikan dulu**. `cua-driver` hanya untuk computer-use / kontrol desktop (klik layar, buka browser). Untuk chat di Telegram, panggil model lewat 9Router, dan jalankan perintah terminal, `cua-driver` tidak dibutuhkan.
+
+Kalau mau cek kesehatan instalasi:
+
+```bash
+hermes pm doctor
+hermes config check
+```
+
+`hermes config check` harus tidak menampilkan error config. Kalau muncul error tentang `config.yaml`, perbaiki dulu sebelum lanjut, lihat Troubleshooting bagian config Hermes.
+
+## 12. Sambungkan Hermes ke 9Router
+
+Jangan pilih model di awal setup Hermes kalau wizard menawarkannya. Kita akan arahkan Hermes ke 9Router secara manual, supaya model bisa diganti nanti tanpa install ulang.
+
+### 12.1 Pastikan 9Router jalan dulu
+
+Di terminal biasa:
+
+```bash
+tmux ls
+curl -s http://localhost:20128/v1/models | head -c 500
+```
+
+Harus ada session `9router` dan daftar model keluar. Kalau tidak, kembali ke Langkah 4 dan 9.
+
+### 12.2 Siapkan API key 9Router
+
+Ambil key 9Router yang kamu buat di Langkah 6.2. Key itu disimpan sebagai environment variable, **jangan tulis key mentah di `config.yaml`**.
+
+Buka file `.env` Hermes:
+
+```bash
+nano ~/.hermes/.env
+```
+
+Tambahkan baris ini (ganti `KEY_9ROUTER_KAMU` dengan key kamu, hanya di terminal kamu sendiri, jangan paste key asli ke chat / GitHub):
+
+```bash
+HERMES_CUSTOM_LOCALHOST_20128_API_KEY=KEY_9ROUTER_KAMU
+OPENAI_API_KEY=KEY_9ROUTER_KAMU
+```
+
+Kenapa ada dua nama? Karena contoh config Hermes lama memakai `${OPENAI_API_KEY}`, sedangkan setup 9Router baru memakai `${HERMES_CUSTOM_LOCALHOST_20128_API_KEY}`. Mengisi keduanya dengan key 9Router yang sama mencegah salah satu dari mereka kosong.
+
+Simpan dengan `Ctrl+O`, Enter, lalu keluar dengan `Ctrl+X`.
+
+> File `~/.hermes/.env` mode-nya `0600`, hanya bisa dibaca oleh kamu. Jangan pernah kirim isi file ini ke orang lain.
+
+### 12.3 Setting model Hermes ke 9Router
+
+Cara paling aman untuk pemula adalah lewat perintah `hermes config set`, bukan edit YAML manual:
+
+```bash
+hermes config set model.default "gemini/gemini-3.8-flash"
+hermes config set model.provider "custom"
+hermes config set model.base_url "http://localhost:20128/v1"
+```
+
+Ganti `gemini/gemini-3.8-flash` dengan nama model yang ada di dashboard 9Router kamu. Contoh lain:
+
+- `ag/gemini-3.8-flash` — kalau modelnya dari Antigravity
+- `kr/claude-sonnet-4.5` — kalau modelnya dari Kiro
+- Nama Combo kamu — kalau kamu buat Combo di Langkah 8
+
+Lalu cek hasilnya:
+
+```bash
+hermes config check
+sed -n '70,95p' ~/.hermes/config.yaml
+```
+
+Harus terlihat blok seperti ini:
+
+```yaml
+model:
+  default: "gemini/gemini-3.8-flash"
+  provider: "custom"
+  base_url: "http://localhost:20128/v1"
+  api_key: ${OPENAI_API_KEY}
+```
+
+Penjelasan:
+
+- `default` = nama model persis seperti di dashboard 9Router
+- `provider: "custom"` = provider custom OpenAI-compatible
+- `base_url` = endpoint 9Router
+- `api_key` = key 9Router lewat environment variable
+
+### 12.4 Cara ganti model nanti
+
+Model bisa diganti kapan saja, tanpa install ulang. Ada dua cara:
+
+**Cara A — Lewat wizard (paling mudah):**
+
+```bash
+hermes model
+```
+
+Pilih provider / model baru dari daftar.
+
+**Cara B — Lewat perintah:**
+
+```bash
+hermes config set model.default "kr/claude-sonnet-4.5"
+hermes -p default gateway restart
+```
+
+Contoh ganti dari Gemini Flash ke model lain, misal ke Kiro atau ke Gemini varian lain, caranya sama: ganti `model.default`, lalu restart gateway.
+
+> Catatan: menghapus provider di dashboard 9Router **tidak otomatis** mengubah model di Hermes. Hermes menyimpan sendiri model default-nya di `~/.hermes/config.yaml`. Kalau kamu hapus Antigravity di 9Router tapi Hermes masih setting `ag/...`, Hermes akan tetap mencoba model lama itu dan gagal. Ganti dulu model di Hermes, baru hapus provider di 9Router, atau sebaliknya dengan urutan yang sadar.
+
+### 12.5 Test Hermes di terminal dulu, sebelum Telegram
+
+Ini langkah yang sering dilewati, padahal paling penting. Kalau Hermes tidak bisa jawab di terminal, Telegram hanya akan menambah tempat lain untuk melihat kegagalan yang sama.
+
+Di terminal biasa (bukan di dalam tmux gateway), jalankan:
+
+```bash
+hermes chat -q "halo, jawab dengan satu kata: OK"
+```
+
+Atau masuk ke mode chat interaktif:
+
+```bash
+hermes chat
+```
+
+Ketik `halo`, tunggu balasan model. Kalau model membalas, berarti Hermes + 9Router + provider sudah benar. Baru lanjut ke Telegram.
+
+Kalau tidak membalas, jangan lanjut ke Telegram dulu. Cek Troubleshooting Hermes di bawah, dan test 9Router langsung seperti Langkah 9.
+
+## 13. Buat Bot Telegram dan Sambungkan ke Hermes
+
+### 13.1 Buat bot di BotFather
+
+1. Buka Telegram di HP / laptop, cari **@BotFather**.
+2. Kirim `/newbot`.
+3. BotFather akan tanya nama bot, contoh `Hermes Altare Bot`.
+4. Lalu tanya username bot, harus diakhiri `bot`, contoh `hermes_altare_lai_bot`. Username harus unik, kalau sudah dipakai orang lain, coba nama lain.
+5. BotFather akan membalas dengan **bot token**, bentuknya seperti:
+
+```
+123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
+```
+
+Copy token itu. Token ini sama rahasianya dengan password. **Jangan paste token asli ke chat, screenshot, atau GitHub.**
+
+### 13.2 Dapatkan Telegram User ID kamu
+
+1. Di Telegram, cari **@userinfobot**.
+2. Kirim pesan apa saja ke bot itu.
+3. Bot akan membalas dengan ID numerik kamu, contoh `123456789`.
+
+ID ini dipakai untuk membatasi siapa yang boleh bicara dengan Hermes kamu.
+
+### 13.3 Sambungkan bot ke Hermes
+
+Ada dua cara. Pilih salah satu.
+
+**Cara A — Lewat wizard gateway (disarankan):**
+
+```bash
+hermes gateway setup
+```
+
+Pilih **Telegram**, lalu ikuti wizard: paste token bot dari BotFather, masukkan User ID kamu saat diminta. Wizard akan menulis kredensial ke `~/.hermes/.env` secara otomatis.
+
+**Cara B — Lewat `.env` manual:**
+
+```bash
+nano ~/.hermes/.env
+```
+
+Tambahkan:
+
+```bash
+TELEGRAM_BOT_TOKEN=TOKEN_BOT_KAMU
+TELEGRAM_ALLOWED_USER_IDS=USER_ID_KAMU
+```
+
+Ganti `TOKEN_BOT_KAMU` dan `USER_ID_KAMU` dengan yang asli, hanya di terminal kamu. Simpan dengan `Ctrl+O`, Enter, `Ctrl+X`.
+
+Nama variabel persisnya bisa berbeda tergantung versi Hermes dan wizard yang kamu pakai. Kalau wizard sudah menulisnya, jangan tambah manual yang duplikat. Cek isi `.env` dengan:
+
+```bash
+grep -i telegram ~/.hermes/.env
+```
+
+Pastikan token dan user ID sudah ada di sana, tanpa menampilkan isinya ke orang lain.
+
+### 13.4 Keamanan Telegram — wajib dibaca
+
+- **Batasi bot hanya untuk User ID kamu sendiri.** Jangan aktifkan allow-all / izinkan semua orang.
+- Bot Hermes punya akses terminal dan file di Sandbox. Kalau orang asing bisa bicara dengannya, mereka bisa menyuruh Hermes menjalankan perintah di server kamu.
+- Jangan bagikan username bot kamu ke grup publik kalau tidak perlu.
+- Kalau token bot bocor, revoke di @BotFather dengan `/revoke`, lalu buat token baru dan update di `~/.hermes/.env`.
+
+## 14. Jalankan Hermes Gateway di tmux
+
+Gateway adalah proses panjang yang menghubungkan Hermes ke Telegram (dan platform lain). Gateway **harus tetap jalan** supaya bot membalas.
+
+### 14.1 Kenapa tidak pakai systemd di Altare
+
+Di VPS biasa, gateway dijalankan sebagai service dengan:
+
+```bash
+hermes gateway install --system
+hermes gateway start
+```
+
+**Jangan jalankan itu di Altare Sandbox.** Sandbox tidak punya `systemd`, jadi perintah itu tidak akan bekerja dengan benar.
+
+Di Sandbox, yang benar adalah: **gateway jalan manual di tmux**, dan `hermes gateway status` akan menampilkan:
+
+```
+Gateway is running (PID: ....) (Running manually, not as a system service)
+```
+
+Itu kondisi yang benar, bukan error.
+
+Satu host hanya boleh ada **satu gateway**. Jangan start gateway kedua. Kalau sudah ada gateway yang jalan, perintah `hermes gateway run` akan bilang gateway sudah melayani profile `default`, dan menyuruhmu pakai `hermes -p default gateway restart`.
+
+### 14.2 Start gateway di tmux `hermes`
+
+Pastikan 9Router sudah jalan dulu (Langkah 12.1), lalu:
+
+```bash
+tmux new -s hermes
+```
+
+Di dalam tmux itu, jalankan:
+
+```bash
+hermes -p default gateway restart
+```
+
+Atau, kalau ini pertama kali dan belum ada gateway yang jalan:
+
+```bash
+hermes gateway run
+```
+
+Tunggu lognya. Yang normal akan muncul seperti ini:
+
+```
+Hermes Gateway Starting...
+Messaging platforms + cron scheduler
+Press Ctrl+C to stop
+[Telegram] Connecting to Telegram (attempt 1/8)...
+[Telegram] Connected to Telegram (polling mode)
+```
+
+Tanggal / jam log akan mengikuti waktu Sandbox kamu, contoh `2026-11-23 12:33:18`.
+
+Setelah muncul `Connected to Telegram (polling mode)`, **jangan tekan `Ctrl+C` dan jangan tutup terminal itu**. Detach dengan:
+
+```
+Ctrl+B lalu D
+```
+
+Gateway tetap jalan di belakang.
+
+### 14.3 Cek status gateway
+
+Di terminal biasa (bukan di dalam tmux gateway), jalankan:
+
+```bash
+hermes gateway status
+```
+
+Hasil yang normal:
+
+```
+Gateway is running (PID: 7501) (Running manually, not as a system service)
+```
+
+Nomor PID akan berbeda di Sandbox kamu.
+
+> **Jangan ketik perintah `hermes` di dalam jendela tmux yang sama dengan tempat gateway sedang jalan di foreground.** Perintah itu mau nyambung ke gateway lewat control socket, tapi akan ditolak. Keluar dulu dari tmux gateway dengan `Ctrl+B` lalu `D`, atau buka SSH baru, baru jalankan `hermes gateway status`.
+
+### 14.4 Restart gateway yang benar
+
+Kalau kamu edit `~/.hermes/config.yaml` atau `~/.hermes/.env` manual, ganti model, atau gateway stuck, restart dengan:
+
+```bash
+hermes -p default gateway restart
+```
+
+Jalankan itu dari terminal biasa, atau dari dalam tmux `hermes` setelah gateway lama berhenti. Jangan jalankan `hermes gateway run` saat gateway lama masih jalan, karena Hermes hanya mengizinkan satu gateway per host.
+
+Kapan restart **tidak perlu**:
+
+- Edit provider di dashboard 9Router (login ulang Antigravity, ganti model di 9Router, tambah provider). Perubahan itu langsung berlaku untuk panggilan berikutnya, Hermes / gateway boleh tetap jalan.
+
+Kapan restart **perlu**:
+
+- Edit manual `~/.hermes/config.yaml` atau `~/.hermes/.env`
+- Key endpoint 9Router di config Hermes berubah
+- Gateway stuck dengan `Agent Running: Yes` dan tidak membalas
+
+### 14.5 Urutan start yang benar setiap Sandbox restart
+
+Setiap kali Sandbox restart / stop lalu start lagi, jalankan urutan ini:
+
+```bash
+# 1. 9Router dulu
+tmux new -d -s 9router '9router --host 127.0.0.1 --port 20128 --skip-update'
+curl -s http://localhost:20128/v1/models | head -c 200
+
+# 2. Baru Hermes gateway
+tmux new -s hermes
+hermes -p default gateway restart
+# tunggu Connected to Telegram, lalu Ctrl+B lalu D
+
+# 3. Cek keduanya
+tmux ls
+hermes gateway status
+```
+
+Harus ada 2 session di `tmux ls`: `9router` dan `hermes`.
+
+## 15. Test Hermes dari Telegram dan Terminal
+
+### 15.1 Test dari Telegram
+
+1. Buka Telegram, cari bot kamu (username yang kamu buat di Langkah 13.1).
+2. Kirim `/start`.
+3. Kirim `/new`.
+4. Kirim pesan biasa, contoh:
+
+```
+halo
+```
+
+5. Tunggu balasan Hermes.
+
+Kalau berhasil, di Telegram akan muncul info session seperti model, provider, context, dan endpoint, lalu balasan dari model.
+
+Contoh session yang sehat:
+
+```
+Model: gemini/gemini-3.8-flash (custom)
+Provider: custom
+Context: 0 / 1.048.576 (0%)
+Connected Platforms: telegram, local
+```
+
+### 15.2 Perintah Telegram yang berguna
+
+Setelah gateway jalan, kamu bisa kontrol Hermes sebagian dari Telegram:
+
+| Perintah | Fungsi |
+|----------|--------|
+| `/new` | Mulai session baru |
+| `/model` | Lihat / ganti model (hanya untuk provider yang sudah dikonfigurasi) |
+| `/config` | Lihat config |
+| `/skills` | Lihat skills |
+| `/cron` | Lihat / kelola cron |
+| `/profile` | Lihat profile |
+| `/approve` | Setujui aksi yang menunggu persetujuan |
+| `/deny` | Tolak aksi yang menunggu persetujuan |
+| `/sethome` | Set home directory |
+| `/restart` | Restart gateway |
+| `/stop` | Stop gateway |
+
+> Yang **tidak bisa** dilakukan hanya dari Telegram: tambah provider baru / API key pertama, edit manual `~/.hermes/config.yaml` / `~/.hermes/.env`, dan restart gateway setelah edit manual. Itu tetap harus dari terminal di Sandbox.
+
+### 15.3 Test dari terminal
+
+Di terminal biasa:
+
+```bash
+hermes gateway status
+hermes chat -q "halo"
+```
+
+Kalau `hermes chat -q` membalas tapi Telegram diam, masalahnya di gateway / Telegram, bukan di model. Kalau keduanya diam, masalahnya di model / 9Router / provider, cek Langkah 9 dan Troubleshooting.
+
+### 15.4 Checklist selesai
+
+Hermes kamu bisa dibilang selesai kalau semua ini benar:
+
+- [ ] `tmux ls` ada `9router` dan `hermes`
+- [ ] `curl http://localhost:20128/v1/models` keluar daftar model
+- [ ] `hermes config check` tidak ada error
+- [ ] `hermes gateway status` bilang `Gateway is running (Running manually, not as a system service)`
+- [ ] Log gateway ada `Connected to Telegram (polling mode)`
+- [ ] Di Telegram, `/new` lalu `halo` dibalas oleh Hermes
+- [ ] Session Telegram menampilkan model yang benar, contoh `gemini/gemini-3.8-flash (custom)`, bukan model lama yang sudah kamu hapus
+
+---
+
 ## Perintah Harian tmux
 
 Simpan bagian ini, ini yang paling sering dipakai.
@@ -763,8 +1287,20 @@ tmux new -d -s 9router '9router --host 127.0.0.1 --port 20128 --skip-update'
 # Matikan session 9router sepenuhnya
 tmux kill-session -t 9router
 
+# Matikan session hermes sepenuhnya
+tmux kill-session -t hermes
+
 # Matikan semua session tmux (hati-hati, Hermes juga mati)
 tmux kill-server
+
+# Cek gateway Hermes (dari terminal biasa, bukan di dalam tmux gateway)
+hermes gateway status
+
+# Restart gateway Hermes
+hermes -p default gateway restart
+
+# Test Hermes di terminal
+hermes chat -q "halo"
 ```
 
 ### Aturan tmux yang sering bikin bingung
@@ -867,6 +1403,55 @@ Ini biasanya **bukan** salah 9Router-nya, tapi provider di dalam 9Router.
 3. Model di Hermes sama dengan model di dashboard 9Router? Cek `~/.hermes/config.yaml` bagian `model.default`.
 4. Gateway Hermes jalan? `tmux attach -t hermes`, lihat apakah ada log `Connected to Telegram (polling mode)`.
 5. Test langsung ke 9Router seperti Langkah 9. Kalau test langsung berhasil tapi Hermes tidak balas, masalahnya di Hermes / Gateway, bukan di provider.
+6. Cek session di Telegram: kalau session menampilkan `Lifetime tokens billed 0`, `Agent Running No`, dan ada error retry backoff, itu tanda panggilan model tidak pernah sampai / tidak pernah berhasil. Kembali ke langkah 1-3.
+
+### Hermes gateway sudah jalan, `hermes gateway run` tidak start yang baru
+
+**Gejala:**
+
+```
+✓ The host gateway already serves profile 'default' — nothing to start. PID 7501
+One gateway per host serves every profile; manage it with `hermes -p default gateway restart`.
+```
+
+**Artinya:** Ini bukan error. Gateway lama masih hidup dan sudah melayani profile `default`. Hermes memang hanya boleh satu gateway per host.
+
+**Solusi:**
+
+- Jangan start gateway kedua.
+- Kalau kamu mau gateway baca config baru, restart yang lama:
+
+```bash
+hermes -p default gateway restart
+```
+
+- Kalau gateway lama itu start sebelum config diperbaiki, dia masih pakai config lama / rusak. Restart wajib setelah perbaiki config.
+
+### `hermes pm install` gagal di `cua-driver`
+
+**Gejala:**
+
+```
+✗ cua-driver: staged entry failed verification, exited 127, libxkbcommon.so.0 cannot open shared object file
+⚠ optional cua-driver was not installed
+```
+
+**Artinya:** `cua-driver` gagal install karena library sistem `libxkbcommon.so.0` tidak ada. Ini driver opsional untuk computer-use.
+
+**Solusi:** Abaikan dulu untuk pemakaian Telegram / terminal. 8 dari 9 tools lain yang berhasil sudah cukup. Jangan ulangi `hermes pm install` berkali-kali hanya untuk `cua-driver`.
+
+### Hermes tidak bisa install / `hermes: command not found`
+
+**Cek:**
+
+```bash
+ls ~/.local/bin/hermes
+source ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+hermes --version
+```
+
+Kalau masih gagal, ulangi installer Langkah 11.2 dan baca log error terakhirnya. Pastikan `curl` dan `git` sudah terinstall.
 
 ### `Gateway inaccessible: unsafe_control_peer`
 
@@ -969,6 +1554,9 @@ Waiting for room on the node. You are number 14 in line.
 cp ~/.hermes/config.yaml ~/.hermes/config.yaml.bak
 ```
 
+7. **Jangan share token bot Telegram dan isi `~/.hermes/.env`.** Token bot sama rahasianya dengan password. Batasi bot hanya untuk User ID kamu sendiri, jangan aktifkan allow-all.
+8. **Jangan commit `~/.hermes/.env`, `~/.hermes/config.yaml` yang berisi key mentah, atau `db.json` 9Router ke GitHub.** Repo ini hanya berisi `README.md` tutorial, tanpa key asli.
+
 ---
 
 ## FAQ
@@ -994,6 +1582,15 @@ Tidak perlu install ulang. Tambah provider Kiro di dashboard 9Router, lalu ganti
 **Apakah tutorial ini bisa dipakai di VPS lain, bukan Altare?**
 Bisa, dengan penyesuaian kecil. Di VPS biasa yang ada `systemd`, kamu bisa pakai `systemd service` sebagai pengganti tmux, tapi tmux tetap bisa dipakai dan lebih simpel untuk pemula. Langkah dashboard, provider, dan endpoint sama.
 
+**Apakah Hermes bisa diganti modelnya nanti?**
+Ya. Pakai `hermes model` di terminal, atau `hermes config set model.default "nama-model-baru"`, lalu `hermes -p default gateway restart`. Di Telegram, ganti model lewat `/model` hanya untuk provider yang sudah dikonfigurasi.
+
+**Apakah Hermes bisa dikonfigurasi lewat Telegram?**
+Sebagian bisa, setelah gateway jalan: `/new`, `/model`, `/config`, `/skills`, `/cron`, `/profile`, `/approve`, `/deny`, `/sethome`, `/restart`, `/stop`. Tambah provider baru / API key pertama, edit manual `~/.hermes/config.yaml` / `~/.hermes/.env`, dan restart gateway setelah edit manual tetap harus dari terminal.
+
+**Apakah Hermes harus dimatikan sebelum edit provider di 9Router?**
+Tidak. Hermes / gateway boleh tetap jalan, edit provider di dashboard 9Router langsung berlaku untuk panggilan berikutnya. Restart hanya perlu kalau kamu edit manual `~/.hermes/config.yaml` / `~/.hermes/.env`, key endpoint berubah, atau gateway stuck.
+
 ---
 
 ## Cara Push Tutorial Ini ke GitHub
@@ -1003,22 +1600,22 @@ Tutorial ini sengaja dibuat sebagai satu file `README.md` supaya mudah di-push k
 ### 1. Buat repo baru di GitHub
 
 1. Buka `https://github.com/new`
-2. Isi **Repository name**, contoh `9router-altare-tmux`
+2. Isi **Repository name**, contoh `hermes-altare`
 3. Pilih **Public**
 4. Jangan centang `Add a README file` (karena kita sudah punya file ini)
 5. Klik **Create repository**
 
 ### 2. Push dari laptop kamu
 
-Di laptop, masuk ke folder tempat file `README.md` ini disimpan. Contoh kalau filenya di `Documents/9router-altare-tmux`:
+Di laptop, masuk ke folder tempat file `README.md` ini disimpan. Contoh kalau filenya di `Documents/hermes-altare`:
 
 ```bash
-cd Documents/9router-altare-tmux
+cd Documents/hermes-altare
 git init
 git add README.md
-git commit -m "Tutorial 9Router di Altare Sandbox dengan tmux, dari nol untuk pemula"
+git commit -m "Tutorial Hermes + 9Router di Altare Sandbox dengan tmux, dari nol untuk pemula"
 git branch -M main
-git remote add origin https://github.com/USERNAME_KAMU/9router-altare-tmux.git
+git remote add origin https://github.com/USERNAME_KAMU/hermes-altare.git
 git push -u origin main
 ```
 
@@ -1046,7 +1643,9 @@ git push
 - Altare Console: `https://console.altare.gg`
 - Altare Status: `https://status.altare.gg`
 - Hermes Agent (Nous Research): `https://github.com/NousResearch/hermes-agent` — cek repo resmi untuk perintah terbaru
+- Hermes Agent installer: `https://hermes-agent.nousresearch.com/install.sh`
+- Hermes Agent docs: `https://hermes-agent.nousresearch.com`
 
 ---
 
-*Dibuat untuk pemula, dari nol. Kalau ada langkah yang sudah berubah di versi 9Router terbaru, cek README resmi 9Router di GitHub sebagai acuan utama.*
+*Dibuat untuk pemula, dari nol. Kalau ada langkah yang sudah berubah di versi 9Router / Hermes terbaru, cek README resmi 9Router dan Hermes di GitHub sebagai acuan utama.*
